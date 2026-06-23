@@ -1,0 +1,6 @@
+{
+  "name": "Project Lifeline",
+  "description": "An AI-powered productivity companion and last-minute life saver that prioritizes, schedules, and helps complete urgent tasks.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
