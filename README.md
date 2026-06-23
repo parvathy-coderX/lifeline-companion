@@ -6,7 +6,7 @@
 
 This contains everything you need to run your app locally.
 
-View your app in AI Studio: https://ai.studio/apps/e49cf3f0-9c09-49d3-908e-91e721ea6ea9
+View app : https://lifeline-companion.vercel.app/
 
 ## Run Locally
 
