@@ -18,8 +18,20 @@ import {
   getFirebaseAuth,
   googleSignIn,
   logoutGoogle,
-  getCachedAccessToken
+  getCachedAccessToken,
+  getFirestoreDb,
+  testConnection,
+  handleFirestoreError,
+  OperationType
 } from "./lib/firebase";
+import {
+  collection,
+  doc,
+  getDocs,
+  setDoc,
+  deleteDoc,
+  writeBatch
+} from "firebase/firestore";
 import {
   fetchGoogleCalendarEvents,
   createGoogleCalendarEvent,
@@ -175,6 +187,8 @@ export default function App() {
   // Firebase auth & OAuth states
   const [firebaseConfig, setFirebaseConfig] = useState<any>(null);
   const [firebaseAuth, setFirebaseAuth] = useState<any>(null);
+  const [firestoreDb, setFirestoreDb] = useState<any>(null);
+  const [syncing, setSyncing] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [googleToken, setGoogleToken] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -207,6 +221,12 @@ export default function App() {
         const authInstance = getFirebaseAuth(config);
         if (authInstance) {
           setFirebaseAuth(authInstance);
+          
+          const dbInstance = getFirestoreDb(config);
+          if (dbInstance) {
+            setFirestoreDb(dbInstance);
+            testConnection(dbInstance);
+          }
           
           // Re-establish session token if available
           const cachedToken = await getCachedAccessToken();
@@ -243,6 +263,101 @@ export default function App() {
     loadConfig();
   }, []);
 
+  // Sync data with Firestore if authenticated
+  useEffect(() => {
+    if (!user || !firestoreDb) {
+      // If not logged in, reset to initial states so logout is clean
+      setTasks(INITIAL_TASKS);
+      setHabits(INITIAL_HABITS);
+      setGoals(INITIAL_GOALS);
+      return;
+    }
+
+    async function syncUserData() {
+      setSyncing(true);
+      try {
+        const userId = user.uid;
+        
+        // 1. Sync Tasks
+        const tasksPath = `users/${userId}/tasks`;
+        let loadedTasks: Task[] = [];
+        try {
+          const tasksSnap = await getDocs(collection(firestoreDb, "users", userId, "tasks"));
+          tasksSnap.forEach(docSnap => {
+            loadedTasks.push(docSnap.data() as Task);
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.LIST, tasksPath, firebaseAuth);
+        }
+
+        if (loadedTasks.length === 0) {
+          // Seed initial tasks
+          const batch = writeBatch(firestoreDb);
+          INITIAL_TASKS.forEach(t => {
+            const taskRef = doc(firestoreDb, "users", userId, "tasks", t.id);
+            batch.set(taskRef, t);
+          });
+          await batch.commit();
+          loadedTasks = [...INITIAL_TASKS];
+        }
+        setTasks(loadedTasks);
+
+        // 2. Sync Habits
+        const habitsPath = `users/${userId}/habits`;
+        let loadedHabits: Habit[] = [];
+        try {
+          const habitsSnap = await getDocs(collection(firestoreDb, "users", userId, "habits"));
+          habitsSnap.forEach(docSnap => {
+            loadedHabits.push(docSnap.data() as Habit);
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.LIST, habitsPath, firebaseAuth);
+        }
+
+        if (loadedHabits.length === 0) {
+          const batch = writeBatch(firestoreDb);
+          INITIAL_HABITS.forEach(h => {
+            const habitRef = doc(firestoreDb, "users", userId, "habits", h.id);
+            batch.set(habitRef, h);
+          });
+          await batch.commit();
+          loadedHabits = [...INITIAL_HABITS];
+        }
+        setHabits(loadedHabits);
+
+        // 3. Sync Goals
+        const goalsPath = `users/${userId}/goals`;
+        let loadedGoals: Goal[] = [];
+        try {
+          const goalsSnap = await getDocs(collection(firestoreDb, "users", userId, "goals"));
+          goalsSnap.forEach(docSnap => {
+            loadedGoals.push(docSnap.data() as Goal);
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.LIST, goalsPath, firebaseAuth);
+        }
+
+        if (loadedGoals.length === 0) {
+          const batch = writeBatch(firestoreDb);
+          INITIAL_GOALS.forEach(g => {
+            const goalRef = doc(firestoreDb, "users", userId, "goals", g.id);
+            batch.set(goalRef, g);
+          });
+          await batch.commit();
+          loadedGoals = [...INITIAL_GOALS];
+        }
+        setGoals(loadedGoals);
+
+      } catch (error) {
+        console.error("Failed to sync user data with Firebase:", error);
+      } finally {
+        setSyncing(false);
+      }
+    }
+
+    syncUserData();
+  }, [user, firestoreDb]);
+
   // Compute Eisenhower matrix quadrant for any task
   const computeQuadrant = (urgency: "high" | "low", importance: "high" | "low"): Task["matrixQuadrant"] => {
     if (urgency === "high" && importance === "high") return "urgent-important";
@@ -274,6 +389,12 @@ export default function App() {
       stressReduction: newTaskImportance === "high" ? 30 : 10
     };
 
+    if (user && firestoreDb) {
+      const path = `users/${user.uid}/tasks/${task.id}`;
+      setDoc(doc(firestoreDb, "users", user.uid, "tasks", task.id), task)
+        .catch(err => handleFirestoreError(err, OperationType.CREATE, path, firebaseAuth));
+    }
+
     setTasks(prev => [task, ...prev]);
     setNewTaskTitle("");
     
@@ -304,6 +425,12 @@ export default function App() {
       tags: [mobileTaskImportance === "high" ? "priority" : "general"],
       stressReduction: mobileTaskImportance === "high" ? 30 : 10
     };
+
+    if (user && firestoreDb) {
+      const path = `users/${user.uid}/tasks/${task.id}`;
+      setDoc(doc(firestoreDb, "users", user.uid, "tasks", task.id), task)
+        .catch(err => handleFirestoreError(err, OperationType.CREATE, path, firebaseAuth));
+    }
 
     setTasks(prev => [task, ...prev]);
     setMobileTaskTitle("");
@@ -338,6 +465,15 @@ export default function App() {
       };
     });
 
+    if (user && firestoreDb) {
+      const batch = writeBatch(firestoreDb);
+      formattedTasks.forEach(task => {
+        const ref = doc(firestoreDb, "users", user.uid, "tasks", task.id);
+        batch.set(ref, task);
+      });
+      batch.commit().catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/tasks`, firebaseAuth));
+    }
+
     const updatedTasks = [...formattedTasks, ...tasks];
     setTasks(updatedTasks);
     setTriggerConfetti(true);
@@ -362,6 +498,12 @@ export default function App() {
       stressReduction: parsedData.importance === "high" ? 40 : 15
     };
 
+    if (user && firestoreDb) {
+      const path = `users/${user.uid}/tasks/${task.id}`;
+      setDoc(doc(firestoreDb, "users", user.uid, "tasks", task.id), task)
+        .catch(err => handleFirestoreError(err, OperationType.CREATE, path, firebaseAuth));
+    }
+
     setTasks(prev => [task, ...prev]);
     triggerAiPrioritization([task, ...tasks]);
     alert(`Voice Command parsed successfully! Added task: "${task.title}"`);
@@ -380,8 +522,9 @@ export default function App() {
       const result = await aiPrioritizeTasks(activeTasks);
       
       // Update tasks state with recommended stress value and quadrants from Gemini
+      let updatedList: Task[] = [];
       setTasks(prev => {
-        return prev.map(t => {
+        const next = prev.map(t => {
           const aiPrioritized = result.prioritizedTasks.find(pt => pt.taskId === t.id);
           if (aiPrioritized) {
             return {
@@ -392,7 +535,24 @@ export default function App() {
           }
           return t;
         });
+        updatedList = next;
+        return next;
       });
+
+      if (user && firestoreDb && updatedList.length > 0) {
+        const batch = writeBatch(firestoreDb);
+        updatedList.forEach(t => {
+          const aiPrioritized = result.prioritizedTasks.find(pt => pt.taskId === t.id);
+          if (aiPrioritized) {
+            const ref = doc(firestoreDb, "users", user.uid, "tasks", t.id);
+            batch.update(ref, {
+              matrixQuadrant: aiPrioritized.matrixQuadrant,
+              stressReduction: aiPrioritized.estimatedStressReduction
+            });
+          }
+        });
+        batch.commit().catch(err => handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/tasks`, firebaseAuth));
+      }
 
       // Find the suggested task
       const suggestedId = result.nextTaskSuggestion.taskId;
@@ -507,12 +667,20 @@ export default function App() {
           if (completed) {
             setTriggerConfetti(true);
           }
-          return {
+          const updated = {
             ...t,
             completed,
             progress,
             steps: t.steps?.map(s => ({ ...s, completed }))
           };
+
+          if (user && firestoreDb) {
+            const path = `users/${user.uid}/tasks/${id}`;
+            setDoc(doc(firestoreDb, "users", user.uid, "tasks", id), updated)
+              .catch(err => handleFirestoreError(err, OperationType.UPDATE, path, firebaseAuth));
+          }
+
+          return updated;
         }
         return t;
       })
@@ -521,6 +689,11 @@ export default function App() {
 
   const handleDeleteTask = (id: string) => {
     if (window.confirm("Are you sure you want to remove this task?")) {
+      if (user && firestoreDb) {
+        const path = `users/${user.uid}/tasks/${id}`;
+        deleteDoc(doc(firestoreDb, "users", user.uid, "tasks", id))
+          .catch(err => handleFirestoreError(err, OperationType.DELETE, path, firebaseAuth));
+      }
       setTasks(prev => prev.filter(t => t.id !== id));
       if (selectedTask?.id === id) setSelectedTask(null);
     }
@@ -531,11 +704,19 @@ export default function App() {
     setTasks(prev =>
       prev.map(t => {
         if (t.id === taskId) {
-          return {
+          const updated = {
             ...t,
             steps: steps.map(s => ({ ...s, completed: false })),
             progress: 0
           };
+
+          if (user && firestoreDb) {
+            const path = `users/${user.uid}/tasks/${taskId}`;
+            setDoc(doc(firestoreDb, "users", user.uid, "tasks", taskId), updated)
+              .catch(err => handleFirestoreError(err, OperationType.UPDATE, path, firebaseAuth));
+          }
+
+          return updated;
         }
         return t;
       })
@@ -555,12 +736,20 @@ export default function App() {
           if (completed && !t.completed) {
             setTriggerConfetti(true);
           }
-          return {
+          const updated = {
             ...t,
             steps: nextSteps,
             progress,
             completed
           };
+
+          if (user && firestoreDb) {
+            const path = `users/${user.uid}/tasks/${taskId}`;
+            setDoc(doc(firestoreDb, "users", user.uid, "tasks", taskId), updated)
+              .catch(err => handleFirestoreError(err, OperationType.UPDATE, path, firebaseAuth));
+          }
+
+          return updated;
         }
         return t;
       })
@@ -574,19 +763,28 @@ export default function App() {
 
     try {
       const summaryResult = await aiSummarizeNotes(editingNotes);
+      let updatedTask: Task | null = null;
       setTasks(prev =>
         prev.map(t => {
           if (t.id === selectedTask.id) {
-            return {
+            updatedTask = {
               ...t,
               notes: editingNotes,
               aiNotesSummary: summaryResult.summary,
               tags: Array.from(new Set([...(t.tags || []), ...summaryResult.tags]))
             };
+            return updatedTask;
           }
           return t;
         })
       );
+
+      if (user && firestoreDb && updatedTask) {
+        const path = `users/${user.uid}/tasks/${selectedTask.id}`;
+        await setDoc(doc(firestoreDb, "users", user.uid, "tasks", selectedTask.id), updatedTask)
+          .catch(err => handleFirestoreError(err, OperationType.UPDATE, path, firebaseAuth));
+      }
+
       alert("AI successfully summarized your notes and suggested auto-tags!");
     } catch (err: any) {
       console.error(err);
@@ -617,11 +815,19 @@ export default function App() {
             nextStreak += 1;
           }
 
-          return {
+          const updated = {
             ...h,
             streak: nextStreak,
             completedDates: nextCompleted
           };
+
+          if (user && firestoreDb) {
+            const path = `users/${user.uid}/habits/${id}`;
+            setDoc(doc(firestoreDb, "users", user.uid, "habits", id), updated)
+              .catch(err => handleFirestoreError(err, OperationType.UPDATE, path, firebaseAuth));
+          }
+
+          return updated;
         }
         return h;
       })
@@ -636,6 +842,13 @@ export default function App() {
       streak: 0,
       completedDates: []
     };
+
+    if (user && firestoreDb) {
+      const path = `users/${user.uid}/habits/${h.id}`;
+      setDoc(doc(firestoreDb, "users", user.uid, "habits", h.id), h)
+        .catch(err => handleFirestoreError(err, OperationType.CREATE, path, firebaseAuth));
+    }
+
     setHabits(prev => [...prev, h]);
   };
 
@@ -649,6 +862,13 @@ export default function App() {
       completed: false,
       category
     };
+
+    if (user && firestoreDb) {
+      const path = `users/${user.uid}/goals/${g.id}`;
+      setDoc(doc(firestoreDb, "users", user.uid, "goals", g.id), g)
+        .catch(err => handleFirestoreError(err, OperationType.CREATE, path, firebaseAuth));
+    }
+
     setGoals(prev => [...prev, g]);
   };
 
@@ -734,11 +954,17 @@ export default function App() {
           </div>
 
           <div className="flex items-center space-x-3">
-            {/* Google Calendar Connection Status Button */}
+            {/* Google Calendar & Database Connection Status */}
             {authLoading ? (
               <span className="text-xs text-slate-500 font-mono">Verifying...</span>
             ) : googleToken ? (
               <div className="flex items-center space-x-2">
+                {firestoreDb && (
+                  <span className="text-[10px] font-mono text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-1 rounded-full flex items-center">
+                    <ShieldCheck className="h-3.5 w-3.5 text-indigo-400 mr-1" />
+                    {syncing ? "Syncing..." : "Database Active"}
+                  </span>
+                )}
                 <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded-full flex items-center">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 mr-1.5 animate-ping" />
                   Synced Calendar

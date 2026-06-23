@@ -1,0 +1,68 @@
+{
+  "entities": {
+    "Task": {
+      "title": "Task",
+      "description": "A task that the user wants to accomplish, categorized in the Eisenhower Matrix.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "dueDate": { "type": "string", "format": "date-time" },
+        "importance": { "type": "string", "enum": ["high", "low"] },
+        "urgency": { "type": "string", "enum": ["high", "low"] },
+        "completed": { "type": "boolean" },
+        "duration": { "type": "integer" },
+        "matrixQuadrant": { "type": "string", "enum": ["urgent-important", "not-urgent-important", "urgent-not-important", "not-urgent-not-important"] },
+        "progress": { "type": "integer" },
+        "steps": { "type": "array" },
+        "tags": { "type": "array" },
+        "stressReduction": { "type": "integer" },
+        "notes": { "type": "string" },
+        "aiNotesSummary": { "type": "string" }
+      },
+      "required": ["id", "title", "dueDate", "importance", "urgency", "completed", "duration", "progress"]
+    },
+    "Habit": {
+      "title": "Habit",
+      "description": "A daily or regular habit that the user wants to track.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "streak": { "type": "integer" },
+        "lastCompleted": { "type": "string" },
+        "completedDates": { "type": "array" }
+      },
+      "required": ["id", "title", "streak", "completedDates"]
+    },
+    "Goal": {
+      "title": "Goal",
+      "description": "A long-term target that the user wants to achieve.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "targetDate": { "type": "string" },
+        "progress": { "type": "integer" },
+        "completed": { "type": "boolean" },
+        "category": { "type": "string", "enum": ["academic", "professional", "personal", "health"] }
+      },
+      "required": ["id", "title", "targetDate", "progress", "completed", "category"]
+    }
+  },
+  "firestore": {
+    "users/{userId}/tasks/{taskId}": {
+      "schema": "Task",
+      "description": "Collection of tasks for a specific user"
+    },
+    "users/{userId}/habits/{habitId}": {
+      "schema": "Habit",
+      "description": "Collection of habits for a specific user"
+    },
+    "users/{userId}/goals/{goalId}": {
+      "schema": "Goal",
+      "description": "Collection of goals for a specific user"
+    }
+  }
+}

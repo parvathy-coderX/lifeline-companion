@@ -1,0 +1,117 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global safety net - default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Task Schema Validation Helper
+    function isValidTask(data) {
+      return data.id is string && data.id.size() <= 128
+          && data.title is string && data.title.size() >= 1 && data.title.size() <= 256
+          && (!('description' in data) || (data.description is string && data.description.size() <= 2048))
+          && data.dueDate is string && data.dueDate.size() <= 64
+          && data.importance is string && (data.importance == 'high' || data.importance == 'low')
+          && data.urgency is string && (data.urgency == 'high' || data.urgency == 'low')
+          && data.completed is bool
+          && data.duration is int && data.duration >= 0 && data.duration <= 10000
+          && (!('matrixQuadrant' in data) || (data.matrixQuadrant is string && (data.matrixQuadrant == 'urgent-important' || data.matrixQuadrant == 'not-urgent-important' || data.matrixQuadrant == 'urgent-not-important' || data.matrixQuadrant == 'not-urgent-not-important')))
+          && data.progress is int && data.progress >= 0 && data.progress <= 100
+          && (!('steps' in data) || data.steps is list)
+          && (!('tags' in data) || data.tags is list)
+          && (!('stressReduction' in data) || (data.stressReduction is int && data.stressReduction >= 0 && data.stressReduction <= 100))
+          && (!('notes' in data) || (data.notes is string && data.notes.size() <= 8192))
+          && (!('aiNotesSummary' in data) || (data.aiNotesSummary is string && data.aiNotesSummary.size() <= 8192));
+    }
+
+    // Habit Schema Validation Helper
+    function isValidHabit(data) {
+      return data.id is string && data.id.size() <= 128
+          && data.title is string && data.title.size() >= 1 && data.title.size() <= 256
+          && data.streak is int && data.streak >= 0
+          && (!('lastCompleted' in data) || (data.lastCompleted is string && data.lastCompleted.size() <= 32))
+          && data.completedDates is list;
+    }
+
+    // Goal Schema Validation Helper
+    function isValidGoal(data) {
+      return data.id is string && data.id.size() <= 128
+          && data.title is string && data.title.size() >= 1 && data.title.size() <= 256
+          && data.targetDate is string && data.targetDate.size() <= 32
+          && data.progress is int && data.progress >= 0 && data.progress <= 100
+          && data.completed is bool
+          && data.category is string && (data.category == 'academic' || data.category == 'professional' || data.category == 'personal' || data.category == 'health');
+    }
+
+    // Match users collection & nested resources
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      match /tasks/{taskId} {
+        allow get, delete: if isOwner(userId) && isValidId(taskId);
+        allow list: if isOwner(userId);
+        
+        allow create: if isOwner(userId) && isValidId(taskId) 
+                      && isValidTask(incoming())
+                      && incoming().id == taskId;
+                      
+        allow update: if isOwner(userId) && isValidId(taskId)
+                      && isValidTask(incoming())
+                      && incoming().id == existing().id;
+      }
+
+      match /habits/{habitId} {
+        allow get, delete: if isOwner(userId) && isValidId(habitId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) && isValidId(habitId)
+                      && isValidHabit(incoming())
+                      && incoming().id == habitId;
+
+        allow update: if isOwner(userId) && isValidId(habitId)
+                      && isValidHabit(incoming())
+                      && incoming().id == existing().id;
+      }
+
+      match /goals/{goalId} {
+        allow get, delete: if isOwner(userId) && isValidId(goalId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) && isValidId(goalId)
+                      && isValidGoal(incoming())
+                      && incoming().id == goalId;
+
+        allow update: if isOwner(userId) && isValidId(goalId)
+                      && isValidGoal(incoming())
+                      && incoming().id == existing().id;
+      }
+    }
+  }
+}
